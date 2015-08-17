@@ -19,6 +19,7 @@ package com.example.android.cardemulation;
 import android.nfc.cardemulation.HostApduService;
 import android.os.Bundle;
 import com.example.android.common.logger.Log;
+import android.os.Handler;
 
 import java.util.Arrays;
 
@@ -51,6 +52,7 @@ public class CardService extends HostApduService {
     private static final byte[] UNKNOWN_CMD_SW = HexStringToByteArray("0000");
     private static final byte[] SELECT_APDU = BuildSelectApdu(SAMPLE_LOYALTY_CARD_AID);
 
+    private final Handler handler = new Handler();
     /**
      * Called if the connection to the NFC card is lost, in order to let the application know the
      * cause for the disconnection (either a lost link, or another AID being selected by the
@@ -87,10 +89,34 @@ public class CardService extends HostApduService {
         // If the APDU matches the SELECT AID command for this service,
         // send the loyalty card account number, followed by a SELECT_OK status trailer (0x9000).
         if (Arrays.equals(SELECT_APDU, commandApdu)) {
-            String account = AccountStorage.GetAccount(this);
-            byte[] accountBytes = account.getBytes();
-            Log.i(TAG, "Sending account number: " + account);
-            return ConcatArrays(accountBytes, SELECT_OK_SW);
+            Runnable r = new Runnable() {
+                @Override
+                public void run() {
+                    handler.post(new Runnable() {
+                        public void run() {
+                            try{
+                                String account = "0011001122";//send Fix Number(temporary)
+                                //String account = "http://yahoo.com";
+                                byte[] accountBytes = account.getBytes();
+                                Log.d("CardServiceThread", "Sending account number: " + account);
+
+                                Thread.sleep(1000);//dummy wait
+
+                                sendResponseApdu(ConcatArrays(accountBytes, SELECT_OK_SW));
+
+                            } catch (Exception e) {
+                                Log.d("CardServiceThread", "Error: " + e.getMessage(), e);
+                                sendResponseApdu(null);
+                            }
+                        }
+                    });
+                }
+            };
+            Thread t = new Thread(r);
+            t.start();
+
+            Log.d("CardServiceThread", "processCommandApdu() return null.");
+            return null;
         } else {
             return UNKNOWN_CMD_SW;
         }
