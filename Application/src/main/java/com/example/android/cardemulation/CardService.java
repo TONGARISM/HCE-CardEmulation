@@ -45,11 +45,16 @@ public class CardService extends HostApduService {
     // ISO-DEP command HEADER for selecting an AID.
     // Format: [Class | Instruction | Parameter 1 | Parameter 2]
     private static final String SELECT_APDU_HEADER = "00A40400";
+    // Format: [Class | Instruction | Parameter 1 | Parameter 2]
+    private static final String INT_AUTH_HEADER = "00880000";
+
     // "OK" status word sent in response to SELECT AID command (0x9000)
     private static final byte[] SELECT_OK_SW = HexStringToByteArray("9000");
     // "UNKNOWN" status word sent in response to invalid APDU command (0x0000)
     private static final byte[] UNKNOWN_CMD_SW = HexStringToByteArray("0000");
     private static final byte[] SELECT_APDU = BuildSelectApdu(SAMPLE_LOYALTY_CARD_AID);
+
+    private static final byte[] INT_AUTH = BuildIntAuth("7788");
 
     /**
      * Called if the connection to the NFC card is lost, in order to let the application know the
@@ -92,11 +97,17 @@ public class CardService extends HostApduService {
             Log.i(TAG, "Sending account number: " + account);
             return ConcatArrays(accountBytes, SELECT_OK_SW);
         } else {
-            return UNKNOWN_CMD_SW;
+            Log.i(TAG, "Checking 2nd sequence");
+            if (Arrays.equals(INT_AUTH, commandApdu)) {
+                byte[] ret = ConcatArrays(HexStringToByteArray("334455"), SELECT_OK_SW);
+                Log.i(TAG, "Recv IntAuth Header! send this to remote:" + ByteArrayToHexString(ret));
+                return ret;
+            }else {
+                return UNKNOWN_CMD_SW;
+            }
         }
     }
     // END_INCLUDE(processCommandApdu)
-
     /**
      * Build APDU for SELECT AID command. This command indicates which service a reader is
      * interested in communicating with. See ISO 7816-4.
@@ -110,6 +121,12 @@ public class CardService extends HostApduService {
                 aid.length() / 2) + aid);
     }
 
+    public static byte[] BuildIntAuth(String key) {
+
+        // Format: [CLASS | INSTRUCTION | PARAMETER 1 | PARAMETER 2 | Lc field | DATA | Le field]
+        //see http://www.cardwerk.com/smartcards/smartcard_standard_ISO7816-4_6_basic_interindustry_commands.aspx#chap6_13
+        return HexStringToByteArray(INT_AUTH_HEADER + String.format("%02X", key.length() / 2) + key + "05");
+    }
     /**
      * Utility method to convert a byte array to a hexadecimal string.
      *
