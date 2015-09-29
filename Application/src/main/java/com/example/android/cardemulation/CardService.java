@@ -20,7 +20,12 @@ import android.nfc.cardemulation.HostApduService;
 import android.os.Bundle;
 import com.example.android.common.logger.Log;
 
+import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.security.InvalidKeyException;
 
 /**
  * This is a sample APDU Service which demonstrates how to interface with the card emulation support
@@ -40,21 +45,32 @@ import java.util.Arrays;
  */
 public class CardService extends HostApduService {
     private static final String TAG = "CardService";
-    // AID for our loyalty card service.
-    private static final String SAMPLE_LOYALTY_CARD_AID = "F222222222";
     // ISO-DEP command HEADER for selecting an AID.
     // Format: [Class | Instruction | Parameter 1 | Parameter 2]
     private static final String SELECT_APDU_HEADER = "00A40400";
+    // ISO-DEP command HEADER for internal authenticating an AID.
     // Format: [Class | Instruction | Parameter 1 | Parameter 2]
     private static final String INT_AUTH_HEADER = "00880000";
+    // ISO-DEP command HEADER for binary reading an AID.
+    // Format: [Class | Instruction | Parameter 1 | Parameter 2]
+    private static final String READ_BIN_HEADER = "00B00000";
+    // ISO-DEP command HEADER size
+    private static final int HEADER_SIZE = 4;
+    // ISO-DEP command LC size
+    private static final int LC_SIZE = 1;
+
+    // AID for our loyalty card service.
+    private static final String SAMPLE_LOYALTY_CARD_AID = "F222222222";
 
     // "OK" status word sent in response to SELECT AID command (0x9000)
     private static final byte[] SELECT_OK_SW = HexStringToByteArray("9000");
     // "UNKNOWN" status word sent in response to invalid APDU command (0x0000)
     private static final byte[] UNKNOWN_CMD_SW = HexStringToByteArray("0000");
+
+
     private static final byte[] SELECT_APDU = BuildSelectApdu(SAMPLE_LOYALTY_CARD_AID);
 
-    private static final byte[] INT_AUTH = BuildIntAuth("7788");
+    private String mKeys = null;
 
     /**
      * Called if the connection to the NFC card is lost, in order to let the application know the
@@ -89,25 +105,54 @@ public class CardService extends HostApduService {
     @Override
     public byte[] processCommandApdu(byte[] commandApdu, Bundle extras) {
         Log.i(TAG, "Received APDU: " + ByteArrayToHexString(commandApdu));
-        // If the APDU matches the SELECT AID command for this service,
-        // send the loyalty card account number, followed by a SELECT_OK status trailer (0x9000).
-        if (Arrays.equals(SELECT_APDU, commandApdu)) {
-            String account = AccountStorage.GetAccount(this);
-            byte[] accountBytes = account.getBytes();
-            Log.i(TAG, "Sending account number: " + account);
-            return ConcatArrays(accountBytes, SELECT_OK_SW);
-        } else {
-            Log.i(TAG, "Checking 2nd sequence");
-            if (Arrays.equals(INT_AUTH, commandApdu)) {
-                byte[] ret = ConcatArrays(HexStringToByteArray("334455"), SELECT_OK_SW);
-                Log.i(TAG, "Recv IntAuth Header! send this to remote:" + ByteArrayToHexString(ret));
-                return ret;
-            }else {
+        
+        if(commandApdu.length <= HEADER_SIZE) {
+            Log.w(TAG, "unknown command.");
+            return UNKNOWN_CMD_SW;
+        }
+
+        if(byteEquals(commandApdu, HexStringToByteArray(SELECT_APDU_HEADER), HexStringToByteArray(SELECT_APDU_HEADER).length)) {
+            Log.i(TAG, "1st sequence : select aid");
+            if(Arrays.equals(SELECT_APDU, commandApdu)) {
+                String account = AccountStorage.GetAccount(this);
+                byte[] accountBytes = account.getBytes();
+                mKeys = null;
+                Log.i(TAG, "Sending account number: " + account);
+                return ConcatArrays(accountBytes, SELECT_OK_SW);
+            } else {
+                Log.w(TAG, "unknown command.");
                 return UNKNOWN_CMD_SW;
             }
+        } else if(byteEquals(commandApdu, HexStringToByteArray(INT_AUTH_HEADER), HexStringToByteArray(INT_AUTH_HEADER).length)) {
+            Log.i(TAG, "2nd sequence : internal authenticate");
+            if(commandApdu.length <= HEADER_SIZE+1) {
+                Log.w(TAG, "unknown command.");
+                return UNKNOWN_CMD_SW;
+            }
+            int dataSize = commandApdu[HEADER_SIZE] < 0 ? commandApdu[HEADER_SIZE] + 256 : commandApdu[HEADER_SIZE];
+            if(commandApdu.length <= HEADER_SIZE+LC_SIZE+dataSize) {
+                Log.w(TAG, "unknown command.");
+                return UNKNOWN_CMD_SW;
+            }
+            byte[] data = Arrays.copyOfRange(commandApdu, HEADER_SIZE+LC_SIZE, HEADER_SIZE+LC_SIZE+dataSize);
+            mKeys = ByteArrayToHexString(data);
+            return SELECT_OK_SW;
+        } else if(byteEquals(commandApdu, HexStringToByteArray(READ_BIN_HEADER), HexStringToByteArray(READ_BIN_HEADER).length)) {
+            Log.i(TAG, "3rd sequence : read binary");
+            int len = commandApdu[commandApdu.length-1];
+            if(mKeys == null) {
+                Log.w(TAG, "illigal sequence.");
+                return UNKNOWN_CMD_SW;
+            }
+            byte[] accountHashAll = calcHmac(mKeys, AccountStorage.GetAccount(this));
+            byte[] accountHash = Arrays.copyOfRange(accountHashAll, 0, len);
+            return ConcatArrays(accountHash, SELECT_OK_SW);
+        } else {
+            return UNKNOWN_CMD_SW;
         }
     }
     // END_INCLUDE(processCommandApdu)
+
     /**
      * Build APDU for SELECT AID command. This command indicates which service a reader is
      * interested in communicating with. See ISO 7816-4.
@@ -121,12 +166,6 @@ public class CardService extends HostApduService {
                 aid.length() / 2) + aid);
     }
 
-    public static byte[] BuildIntAuth(String key) {
-
-        // Format: [CLASS | INSTRUCTION | PARAMETER 1 | PARAMETER 2 | Lc field | DATA | Le field]
-        //see http://www.cardwerk.com/smartcards/smartcard_standard_ISO7816-4_6_basic_interindustry_commands.aspx#chap6_13
-        return HexStringToByteArray(INT_AUTH_HEADER + String.format("%02X", key.length() / 2) + key + "05");
-    }
     /**
      * Utility method to convert a byte array to a hexadecimal string.
      *
@@ -185,6 +224,44 @@ public class CardService extends HostApduService {
             System.arraycopy(array, 0, result, offset, array.length);
             offset += array.length;
         }
+        return result;
+    }
+
+    private boolean byteEquals(byte a[], byte b[], int len) {
+        if(a == null || b == null) {
+            return false;
+        } else if(a.length < len || b.length < len) {
+            return false;
+        }
+        for(int i = 0; i < len; i++) {
+            if(a[i] != b[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private byte[] calcHmac(String key, String str){
+        String ALGORISM = "hmacSHA256";
+        //String key = "key";
+        //String str ="012345";
+        byte[] result =null;
+
+        SecretKeySpec secretKeySpec = new SecretKeySpec(key.getBytes(), ALGORISM);
+        try {
+            Mac mac = Mac.getInstance(ALGORISM);
+            mac.init(secretKeySpec);
+            result = mac.doFinal(str.getBytes());
+            Log.i(TAG, "HMAC:"+str + " "+ALGORISM+ " -> " + ByteArrayToHexString(result));
+
+        }
+        catch (NoSuchAlgorithmException e) {
+            Log.i(TAG, "HMAC:NoSuchAlgorithmException:" + ALGORISM);
+        }
+        catch (InvalidKeyException e) {
+            Log.i(TAG, "HMAC:InvalidKeyException:" + key);
+        }
+
         return result;
     }
 }
