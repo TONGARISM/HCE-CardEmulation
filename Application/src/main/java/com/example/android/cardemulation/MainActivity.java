@@ -17,6 +17,10 @@
 
 package com.example.android.cardemulation;
 
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.Bundle;
 import android.support.v4.app.FragmentTransaction;
 import android.view.Menu;
@@ -43,6 +47,8 @@ public class MainActivity extends SampleActivityBase {
     // Whether the Log Fragment is currently shown
     private boolean mLogShown;
 
+    public static String ACTION_TOKEN_SET = "android.nfc.cardemulation.action.ACTION_TOKEN_SET";
+    CardEmulationFragment cardFragment;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -50,10 +56,14 @@ public class MainActivity extends SampleActivityBase {
 
         if (savedInstanceState == null) {
             FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
-            CardEmulationFragment fragment = new CardEmulationFragment();
-            transaction.replace(R.id.sample_content_fragment, fragment);
+            cardFragment = new CardEmulationFragment();
+            transaction.replace(R.id.sample_content_fragment, cardFragment);
             transaction.commit();
         }
+
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(ACTION_TOKEN_SET);
+        registerReceiver(myReceiver,filter);
     }
 
     @Override
@@ -107,4 +117,16 @@ public class MainActivity extends SampleActivityBase {
 
         Log.i(TAG, "Ready");
     }
+
+    public BroadcastReceiver myReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if (action.equals(ACTION_TOKEN_SET)){
+                Log.i(TAG, "onReceive() ACTION_TOKEN_SET");
+                String token = intent.getStringExtra("TOKEN");
+                cardFragment.updateAccountDisplay(token);
+            }
+        }
+    };
 }

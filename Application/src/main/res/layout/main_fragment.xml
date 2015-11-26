@@ -51,7 +51,7 @@ limitations under the License.
             android:textSize="18dp"
             android:layout_marginTop="40dp"
             />
-        <EditText
+        <TextView
             android:id="@+id/card_account_field"
             android:width="360dp"
             android:layout_width="wrap_content"
@@ -60,6 +60,6 @@ limitations under the License.
             android:textStyle="bold"
             android:textSize="42dp"
             android:singleLine="true"
-            android:inputType="number" />
+            />
     </LinearLayout>
 </FrameLayout>

@@ -16,11 +16,20 @@
 
 package com.example.android.cardemulation;
 
+import android.accounts.Account;
+import android.accounts.AccountManager;
+import android.content.Intent;
+import android.content.SharedPreferences;
 import android.nfc.cardemulation.HostApduService;
 import android.os.Bundle;
+import android.os.UserHandle;
+import android.preference.PreferenceManager;
+import android.widget.Toast;
+
 import com.example.android.common.logger.Log;
 
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Arrays;
 
 import javax.crypto.Mac;
@@ -54,6 +63,10 @@ public class CardService extends HostApduService {
     // ISO-DEP command HEADER for binary reading an AID.
     // Format: [Class | Instruction | Parameter 1 | Parameter 2]
     private static final String READ_BIN_HEADER = "00B00000";
+    // ISO-DEP command HEADER for binary writing an AID.
+    // Format: [Class | Instruction | Parameter 1 | Parameter 2]
+    private static final String WRITE_BIN_HEADER = "00D00000";
+
     // ISO-DEP command HEADER size
     private static final int HEADER_SIZE = 4;
     // ISO-DEP command LC size
@@ -70,7 +83,10 @@ public class CardService extends HostApduService {
 
     private static final byte[] SELECT_APDU = BuildSelectApdu(SAMPLE_LOYALTY_CARD_AID);
 
-    private String mKeys = null;
+    public static String ACTION_TOKEN_SET = "android.nfc.cardemulation.action.ACTION_TOKEN_SET";
+
+    // ISO-DEP command LC size
+    private static final int TOKEN_LENGTH = 12;
 
     /**
      * Called if the connection to the NFC card is lost, in order to let the application know the
@@ -104,6 +120,7 @@ public class CardService extends HostApduService {
     // BEGIN_INCLUDE(processCommandApdu)
     @Override
     public byte[] processCommandApdu(byte[] commandApdu, Bundle extras) {
+        String token = null;
         Log.i(TAG, "Received APDU: " + ByteArrayToHexString(commandApdu));
         
         if(commandApdu.length <= HEADER_SIZE) {
@@ -112,19 +129,22 @@ public class CardService extends HostApduService {
         }
 
         if(byteEquals(commandApdu, HexStringToByteArray(SELECT_APDU_HEADER), HexStringToByteArray(SELECT_APDU_HEADER).length)) {
-            Log.i(TAG, "1st sequence : select aid");
+
             if(Arrays.equals(SELECT_APDU, commandApdu)) {
-                String account = AccountStorage.GetAccount(this);
-                byte[] accountBytes = account.getBytes();
-                mKeys = null;
-                Log.i(TAG, "Sending account number: " + account);
-                return ConcatArrays(accountBytes, SELECT_OK_SW);
+                token = AccountStorage.GetAccount(this);
+                if(token != null){
+                    Log.i(TAG, "2-1st sequence : select aid");
+                    return ConcatArrays(HexStringToByteArray(token), SELECT_OK_SW);
+                }else{
+                    Log.i(TAG, "1-1st sequence : select aid");
+                    return SELECT_OK_SW;
+                }
             } else {
                 Log.w(TAG, "unknown command.");
                 return UNKNOWN_CMD_SW;
             }
         } else if(byteEquals(commandApdu, HexStringToByteArray(INT_AUTH_HEADER), HexStringToByteArray(INT_AUTH_HEADER).length)) {
-            Log.i(TAG, "2nd sequence : internal authenticate");
+            Log.i(TAG, "1-2nd sequence : internal authenticate");
             if(commandApdu.length <= HEADER_SIZE+1) {
                 Log.w(TAG, "unknown command.");
                 return UNKNOWN_CMD_SW;
@@ -134,19 +154,45 @@ public class CardService extends HostApduService {
                 Log.w(TAG, "unknown command.");
                 return UNKNOWN_CMD_SW;
             }
-            byte[] data = Arrays.copyOfRange(commandApdu, HEADER_SIZE+LC_SIZE, HEADER_SIZE+LC_SIZE+dataSize);
-            mKeys = ByteArrayToHexString(data);
-            return SELECT_OK_SW;
-        } else if(byteEquals(commandApdu, HexStringToByteArray(READ_BIN_HEADER), HexStringToByteArray(READ_BIN_HEADER).length)) {
-            Log.i(TAG, "3rd sequence : read binary");
-            int len = commandApdu[commandApdu.length-1];
-            if(mKeys == null) {
-                Log.w(TAG, "illigal sequence.");
+            Account googleAcount =getGoogleAccount();
+            if(googleAcount ==null){
                 return UNKNOWN_CMD_SW;
+            }else {
+                String hashCode = String.valueOf(googleAcount.hashCode());
+                Log.d(TAG, "hashCode = " + hashCode + ", length = " + hashCode.length());
+                if((hashCode.length() % 2) ==1){
+                    hashCode = hashCode.concat("0");
+                }
+                return ConcatArrays( HexStringToByteArray(hashCode), SELECT_OK_SW);
             }
-            byte[] accountHashAll = calcHmac(mKeys, AccountStorage.GetAccount(this));
-            byte[] accountHash = Arrays.copyOfRange(accountHashAll, 0, len);
-            return ConcatArrays(accountHash, SELECT_OK_SW);
+        } else if(byteEquals(commandApdu, HexStringToByteArray(WRITE_BIN_HEADER), HexStringToByteArray(WRITE_BIN_HEADER).length)) {
+            String header =WRITE_BIN_HEADER;
+            int startlen = header.length();
+            String kind = ByteArrayToHexString(commandApdu).substring(startlen, startlen + 2);
+            if(kind.equals("AA")){
+                Log.i(TAG, "1-3rd sequence : write binary (Token)");
+                //write TOKEN.;
+                startlen = WRITE_BIN_HEADER.length() + "AA".length();
+                token = ByteArrayToHexString(commandApdu).substring(startlen, startlen + TOKEN_LENGTH);
+                Log.i(TAG, "1-3rd sequence : Token is " + token);
+                AccountStorage.SetAccount(this, token);
+                Intent intent = new Intent(ACTION_TOKEN_SET);
+                intent.putExtra("TOKEN",token);
+                sendBroadcast(intent);
+                return SELECT_OK_SW;
+            }else if(kind.equals("BB")){
+                Log.i(TAG, "2-2rd sequence : write binary (POINTs)");
+                //write POINTs.
+                startlen = WRITE_BIN_HEADER.length() + "BB".length();
+                int pointlength =  ByteArrayToHexString(commandApdu).length() - startlen;
+                String points = ByteArrayToHexString(commandApdu).substring(startlen, startlen + pointlength);
+
+                Toast.makeText(this, points+" points.", Toast.LENGTH_LONG).show();
+                return SELECT_OK_SW;
+            }else{
+                ;
+            }
+            return UNKNOWN_CMD_SW;
         } else {
             return UNKNOWN_CMD_SW;
         }
@@ -263,5 +309,41 @@ public class CardService extends HostApduService {
         }
 
         return result;
+    }
+    /**
+     Get Google Account Info
+     **/
+    private Account getGoogleAccount() {
+        Log.d(TAG, "getGoogleAccount() start.");
+        ArrayList accountsInfo = new ArrayList();
+        Account[] accounts = AccountManager.get(this).getAccounts();
+        for (Account account : accounts) {
+            String name = account.name;
+            String type = account.type;
+            int describeContents = account.describeContents();
+            int hashCode = account.hashCode();
+            Log.d(TAG, "name = " + name +
+                    ",type = " + type +
+                    ",describeContents = " + describeContents +
+                    ",hashCode = " + hashCode + ".");
+            if(type.equals("com.google")){
+                return account;//find google account
+            }
+        }
+        return null;
+    }
+
+    /**
+     Save Token.
+     **/
+    private void saveToken(String token){
+        AccountStorage.SetAccount(this,token);
+    }
+
+    /**
+     Get Token if saved.
+     **/
+    private String getToken(){
+        return AccountStorage.GetAccount(this);
     }
 }

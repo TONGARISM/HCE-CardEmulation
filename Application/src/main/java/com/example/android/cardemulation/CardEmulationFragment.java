@@ -24,6 +24,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
+import android.widget.TextView;
 
 /**
  * Generic UI for sample discovery.
@@ -31,7 +32,7 @@ import android.widget.EditText;
 public class CardEmulationFragment extends Fragment {
 
     public static final String TAG = "CardEmulationFragment";
-
+    static TextView tvAccount;
     /** Called when sample is created. Displays generic UI with welcome text. */
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -43,12 +44,21 @@ public class CardEmulationFragment extends Fragment {
                              Bundle savedInstanceState) {
         // Inflate the layout for this fragment
         View v = inflater.inflate(R.layout.main_fragment, container, false);
-        EditText account = (EditText) v.findViewById(R.id.card_account_field);
-        account.setText(AccountStorage.GetAccount(getActivity()));
-        account.addTextChangedListener(new AccountUpdater());
+        //EditText account = (EditText) v.findViewById(R.id.card_account_field);
+        //account.setText(AccountStorage.GetAccount(getActivity()));
+        //account.addTextChangedListener(new AccountUpdater());
+        tvAccount = (TextView) v.findViewById(R.id.card_account_field);
+        String num =AccountStorage.GetAccount(getActivity());
+        if(num != null) {
+            tvAccount.setText(num);
+        }
+        //account.addTextChangedListener(new AccountUpdater());
         return v;
     }
 
+    public void updateAccountDisplay(String num) {
+        tvAccount.setText(num);
+    }
 
     private class AccountUpdater implements TextWatcher {
         @Override
